@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "dadoux01.agenda",
   "name": "Agenda",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": "dadoux01",
   "description": "Your calendars in the bar: agenda, add and delete events, synced reminders and a daily recap. Google, iCloud, any CalDAV server and .ics links.",
   "homepage": "https://github.com/dadoux01/omarchy-agenda",

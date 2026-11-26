@@ -57,7 +57,9 @@ BarWidget {
     var win = button.QsWindow ? button.QsWindow.window : null
     var mine = win && win.screen ? win.screen.name : ""
     var focused = Hyprland.focusedMonitor ? Hyprland.focusedMonitor.name : ""
-    return !mine || !focused || mine === focused
+    if (!mine) return true
+    if (focused) return mine === focused
+    return Quickshell.screens.length === 0 || mine === Quickshell.screens[0].name
   }
 
   // ------------------------------------------------------------- label
@@ -66,12 +68,13 @@ BarWidget {
   Timer {
     interval: 20000
     repeat: true
-    running: true
+    running: root.events.length > 0
     triggeredOnStart: true
     onTriggered: root.now = Date.now()
   }
 
   readonly property var events: service ? service.events : []
+  onEventsChanged: root.now = Date.now()
   // Characters for the whole label, time part included. The title is what
   // gets shortened; hover shows it in full.
   readonly property int maxLabel: Math.max(10, Math.min(80, Number(setting("maxLabel", 24)) || 24))
@@ -84,7 +87,7 @@ BarWidget {
   readonly property var labelParts: {
     if (!focusInfo) return null
     var e = focusInfo.event
-    var title = e.title || "…"
+    var title = String(e.title || "…").replace(/[\r\n]+/g, " ")
     if (focusInfo.running) {
       var left = Model.minutesUntil(e.end, now)
       return left <= 90

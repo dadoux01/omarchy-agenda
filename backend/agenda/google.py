@@ -20,6 +20,7 @@ import os
 import re
 import secrets as _random
 import shutil
+import stat
 import subprocess
 import threading
 import time
@@ -55,13 +56,20 @@ def read_client_file(path):
     path = os.path.expanduser(str(path or "").strip())
     if not path or not os.path.isabs(path):
         raise ProviderError("google_client_file")
+    fd = None
     try:
-        if os.path.getsize(path) > MAX_CLIENT_FILE:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_CLIENT_FILE:
             raise ProviderError("google_client_file")
-        with open(path, encoding="utf-8") as fh:
+        with os.fdopen(fd, "r", encoding="utf-8") as fh:
+            fd = None
             data = json.load(fh)
     except (OSError, ValueError):
         raise ProviderError("google_client_file")
+    finally:
+        if fd is not None:
+            os.close(fd)
     return client_from_json(data)
 
 
@@ -113,6 +121,10 @@ def _pkce():
 
 
 class _Callback(http.server.BaseHTTPRequestHandler):
+    def setup(self):
+        super().setup()
+        self.request.settimeout(5.0)
+
     def do_GET(self):
         query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
         state = (query.get("state") or [""])[0]
@@ -272,7 +284,8 @@ class Session:
             resp = net.request(method, url, headers=h, body=body, auth="Bearer " + self.token(),
                                scope=API_SCOPE, timeout=15 if method != "GET" else 20)
             if resp.status == 401 and attempt == 0:
-                self.access_token = ""  # revoked or expired early; refresh once
+                with self.lock:
+                    self.access_token = ""  # revoked or expired early; refresh once
                 continue
             break
         if resp.status in ok or resp.status == 304:
@@ -416,7 +429,7 @@ def event_from_api(item, default_alarms, zone):
         "end_ms": ics.to_epoch_ms(end, zone),
         "all_day": not isinstance(start, dt.datetime),
         "recurring": recurring,
-        "recurrence_id": str(item["id"]) if recurring else "",
+        "recurrence_id": str(item["id"])[:1000] if recurring else "",
         "alarms_before": list(alarms),
         "alarms_at": [],
         "meeting_url": meeting,
@@ -450,7 +463,11 @@ class GoogleProvider:
                              "refresh_token": tokens["refresh_token"]})
         session = Session(secret)
         session.access_token = tokens["access_token"]
-        session.expires = time.time() + int(tokens.get("expires_in", 3600))
+        try:
+            expires_in = int(tokens.get("expires_in", 3600))
+        except (TypeError, ValueError):
+            expires_in = 3600
+        session.expires = time.time() + max(60, expires_in)
         try:
             cals = session.calendars()
         except net.NetError as exc:
@@ -468,8 +485,13 @@ class GoogleProvider:
 
     def reconnect(self, secret, cancel=None, opener=open_browser, login_hint=""):
         """A fresh refresh token for an account Google signed out."""
-        old = json.loads(secret)
-        tokens = authorize(old["client_id"], old["client_secret"], cancel,
+        try:
+            old = json.loads(secret)
+            client_id = old["client_id"]
+            client_secret = old["client_secret"]
+        except (ValueError, KeyError, TypeError):
+            raise ProviderError("missing_secret")
+        tokens = authorize(client_id, client_secret, cancel,
                            login_hint=login_hint, opener=opener)
         old["refresh_token"] = tokens["refresh_token"]
         return json.dumps(old)

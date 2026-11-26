@@ -37,15 +37,19 @@ class StorageError(Exception):
 def ensure_dir(path):
     try:
         os.makedirs(path, mode=0o700, exist_ok=True)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY)
     except OSError as exc:
         raise StorageError("cannot create " + path + ": " + str(exc))
-    st = os.lstat(path)
-    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
-        raise StorageError(path + " is not a plain directory")
-    if st.st_uid != os.getuid():
-        raise StorageError(path + " is not owned by the current user")
-    if stat.S_IMODE(st.st_mode) & 0o077:
-        os.chmod(path, 0o700)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISDIR(st.st_mode):
+            raise StorageError(path + " is not a plain directory")
+        if st.st_uid != os.getuid():
+            raise StorageError(path + " is not owned by the current user")
+        if stat.S_IMODE(st.st_mode) & 0o077:
+            os.fchmod(fd, 0o700)
+    finally:
+        os.close(fd)
     return path
 
 

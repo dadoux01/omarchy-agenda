@@ -255,13 +255,19 @@ def parse_date_value(value, params=None, vtimezones=None):
     value = value.strip()
     params = params or {}
     m = _DATE_RE.match(value)
-    if m and params.get("VALUE", "DATE") in ("DATE", ""):
-        return dt.date(int(m[1]), int(m[2]), int(m[3]))
+    if m and params.get("VALUE", "DATE").strip().upper() in ("DATE", ""):
+        try:
+            return dt.date(int(m[1]), int(m[2]), int(m[3]))
+        except (ValueError, OverflowError):
+            raise IcsError("bad_date")
     m = _DATETIME_RE.match(value)
     if not m:
         raise IcsError("bad_date")
-    naive = dt.datetime(int(m[1]), int(m[2]), int(m[3]), int(m[4]), int(m[5]),
-                        min(int(m[6]), 59))
+    try:
+        naive = dt.datetime(int(m[1]), int(m[2]), int(m[3]), int(m[4]), int(m[5]),
+                            min(int(m[6]), 59))
+    except (ValueError, OverflowError):
+        raise IcsError("bad_date")
     if m[7] == "Z":
         return naive.replace(tzinfo=UTC)
     zone = resolve_zone(params.get("TZID"), vtimezones) if params.get("TZID") else local_zone()
@@ -304,8 +310,11 @@ def parse_duration(value):
         raise IcsError("bad_duration")
     sign = -1 if m[1] == "-" else 1
     weeks, days, hours, minutes, seconds = (int(x) if x else 0 for x in m.groups()[1:])
-    return sign * dt.timedelta(weeks=weeks, days=days, hours=hours,
-                               minutes=minutes, seconds=seconds)
+    try:
+        return sign * dt.timedelta(weeks=weeks, days=days, hours=hours,
+                                   minutes=minutes, seconds=seconds)
+    except OverflowError:
+        raise IcsError("bad_duration")
 
 
 def occurrence_key(value):
@@ -423,7 +432,7 @@ def _setpos(cands, rule):
 
 
 def expand_rrule(rule_value, dtstart, range_start, range_end,
-                 max_instances=MAX_INSTANCES_PER_EVENT):
+                 max_instances=MAX_INSTANCES_PER_EVENT, zone=None):
     """Start values (dates or aware datetimes) of the occurrences of a rule
     that begin inside [range_start, range_end), dtstart included when it
     matches. Wall-clock time is kept across DST, as RFC 5545 requires.
@@ -433,15 +442,17 @@ def expand_rrule(rule_value, dtstart, range_start, range_end,
     rule = parse_rrule(rule_value)
     freq = rule.get("FREQ")
     if freq not in ("DAILY", "WEEKLY", "MONTHLY", "YEARLY"):
-        return [dtstart] if _in_range(dtstart, range_start, range_end) else []
+        return [dtstart] if _in_range(dtstart, range_start, range_end, zone) else []
     try:
-        interval = max(1, int(rule.get("INTERVAL", "1")))
+        interval = min(10_000, max(1, int(rule.get("INTERVAL", "1"))))
     except ValueError:
         interval = 1
     try:
         count = int(rule["COUNT"]) if "COUNT" in rule else None
     except ValueError:
         count = None
+    if count is not None and count <= 0:
+        return []
     until = None
     if "UNTIL" in rule:
         try:
@@ -450,7 +461,8 @@ def expand_rrule(rule_value, dtstart, range_start, range_end,
             until = None
 
     all_day = not isinstance(dtstart, dt.datetime)
-    zone = None if all_day else dtstart.tzinfo
+    dt_zone = None if all_day else dtstart.tzinfo
+    cmp_zone = zone or dt_zone or range_start.tzinfo
     start_date = dtstart if all_day else dtstart.date()
     start_time = None if all_day else dtstart.timetz().replace(tzinfo=None)
     bymonth = set(_ints(rule.get("BYMONTH", ""), 1, 12))
@@ -460,7 +472,7 @@ def expand_rrule(rule_value, dtstart, range_start, range_end,
     def make(d):
         if all_day:
             return d
-        return dt.datetime.combine(d, start_time).replace(tzinfo=zone)
+        return dt.datetime.combine(d, start_time).replace(tzinfo=dt_zone)
 
     def past_until(value):
         if until is None:
@@ -468,14 +480,14 @@ def expand_rrule(rule_value, dtstart, range_start, range_end,
         if isinstance(until, dt.datetime):
             if isinstance(value, dt.datetime):
                 return value > until
-            return dt.datetime(value.year, value.month, value.day, tzinfo=zone or UTC) > until
+            return dt.datetime(value.year, value.month, value.day, tzinfo=dt_zone or UTC) > until
         v = value.date() if isinstance(value, dt.datetime) else value
         return v > until
 
     # Skip whole periods ahead when nothing has to be counted.
     skip = 0
     if count is None:
-        target = range_start.astimezone(zone).date() if zone else range_start.date()
+        target = range_start.astimezone(dt_zone).date() if dt_zone else range_start.date()
         target -= dt.timedelta(days=1)
         if target > start_date:
             if freq == "DAILY":
@@ -494,65 +506,72 @@ def expand_rrule(rule_value, dtstart, range_start, range_end,
     week_anchor = start_date - dt.timedelta(days=(start_date.weekday() - wkst) % 7)
     for period in range(skip, skip + MAX_PERIODS):
         step = period * interval
-        if freq == "DAILY":
-            d = start_date + dt.timedelta(days=step)
-            cands = [d]
-            if bymonth and d.month not in bymonth:
-                cands = []
-            if byday and d.weekday() not in [w for _, w in byday]:
-                cands = []
-            md = _ints(rule.get("BYMONTHDAY", ""), 1, 31)
-            if md:
-                last = _cal.monthrange(d.year, d.month)[1]
-                if not any((m if m > 0 else last + m + 1) == d.day for m in md):
+        try:
+            if freq == "DAILY":
+                d = start_date + dt.timedelta(days=step)
+                cands = [d]
+                if bymonth and d.month not in bymonth:
                     cands = []
-            period_start = d
-        elif freq == "WEEKLY":
-            ws = week_anchor + dt.timedelta(days=7 * step)
-            if byday:
-                cands = sorted(ws + dt.timedelta(days=(w - wkst) % 7) for _, w in byday)
-            else:
-                cands = [ws + dt.timedelta(days=(start_date.weekday() - wkst) % 7)]
-            if bymonth:
-                cands = [c for c in cands if c.month in bymonth]
-            cands = _setpos(cands, rule)
-            period_start = ws
-        elif freq == "MONTHLY":
-            y, m = _add_months(start_date.year, start_date.month, step)
-            cands = [] if (bymonth and m not in bymonth) else _month_candidates(y, m, rule, start_date.day)
-            cands = _setpos(cands, rule)
-            period_start = dt.date(y, m, 1)
-        else:  # YEARLY
-            y = start_date.year + step
-            if y > 9000:
-                break
-            months = sorted(bymonth) if bymonth else [start_date.month]
-            if byday and not bymonth and "BYMONTHDAY" not in rule:
-                cands = _year_weekday_candidates(y, byday)
-            else:
-                cands = []
-                for m in months:
-                    if "BYMONTHDAY" in rule or byday:
-                        cands.extend(_month_candidates(y, m, rule, start_date.day))
-                    elif start_date.day <= _cal.monthrange(y, m)[1]:
-                        cands.append(dt.date(y, m, start_date.day))
-            cands = _setpos(sorted(cands), rule)
-            period_start = dt.date(y, 1, 1)
+                if byday and d.weekday() not in [w for _, w in byday]:
+                    cands = []
+                md = _ints(rule.get("BYMONTHDAY", ""), 1, 31)
+                if md:
+                    last = _cal.monthrange(d.year, d.month)[1]
+                    if not any((m if m > 0 else last + m + 1) == d.day for m in md):
+                        cands = []
+                period_start = d
+            elif freq == "WEEKLY":
+                ws = week_anchor + dt.timedelta(days=7 * step)
+                if byday:
+                    offsets = sorted({(w - wkst) % 7 for _, w in byday})
+                    cands = [ws + dt.timedelta(days=off) for off in offsets]
+                else:
+                    cands = [ws + dt.timedelta(days=(start_date.weekday() - wkst) % 7)]
+                if bymonth:
+                    cands = [c for c in cands if c.month in bymonth]
+                cands = _setpos(cands, rule)
+                period_start = ws
+            elif freq == "MONTHLY":
+                y, m = _add_months(start_date.year, start_date.month, step)
+                cands = [] if (bymonth and m not in bymonth) else _month_candidates(y, m, rule, start_date.day)
+                cands = _setpos(cands, rule)
+                period_start = dt.date(y, m, 1)
+            else:  # YEARLY
+                y = start_date.year + step
+                if y > 9000:
+                    break
+                months = sorted(bymonth) if bymonth else [start_date.month]
+                if byday and not bymonth and "BYMONTHDAY" not in rule:
+                    cands = _year_weekday_candidates(y, byday)
+                else:
+                    cands = []
+                    for m in months:
+                        if "BYMONTHDAY" in rule or byday:
+                            cands.extend(_month_candidates(y, m, rule, start_date.day))
+                        elif start_date.day <= _cal.monthrange(y, m)[1]:
+                            cands.append(dt.date(y, m, start_date.day))
+                cands = _setpos(sorted(cands), rule)
+                period_start = dt.date(y, 1, 1)
+        except (ValueError, OverflowError):
+            break
 
         if period_start.year > 9000:
             break
         for c in cands:
             if c < start_date:
                 continue
-            value = make(c)
+            try:
+                value = make(c)
+            except (ValueError, OverflowError):
+                continue
             if past_until(value):
                 return out
             emitted += 1
             if count is not None and emitted > count:
                 return out
-            if _starts_after(value, range_end):
+            if _starts_after(value, range_end, cmp_zone):
                 return out
-            if _in_range(value, range_start, range_end):
+            if _in_range(value, range_start, range_end, cmp_zone):
                 out.append(value)
                 if len(out) >= max_instances:
                     return out
@@ -565,13 +584,13 @@ def _as_dt(value, zone=None):
     return dt.datetime(value.year, value.month, value.day, tzinfo=zone or local_zone())
 
 
-def _in_range(value, range_start, range_end):
-    v = _as_dt(value)
+def _in_range(value, range_start, range_end, zone=None):
+    v = _as_dt(value, zone)
     return range_start <= v < range_end
 
 
-def _starts_after(value, range_end):
-    return _as_dt(value) >= range_end
+def _starts_after(value, range_end, zone=None):
+    return _as_dt(value, zone) >= range_end
 
 
 # --------------------------------------------------------------------------
@@ -634,11 +653,14 @@ def _end_for(comp, start, vtz):
             dur = parse_duration(p.value)
             if dur.total_seconds() > 0:
                 return start + dur
-        except IcsError:
+        except (IcsError, OverflowError):
             pass
     if isinstance(start, dt.datetime):
         return start
-    return start + dt.timedelta(days=1)
+    try:
+        return start + dt.timedelta(days=1)
+    except OverflowError:
+        return start
 
 
 MEETING_HOSTS = (
@@ -658,6 +680,19 @@ def safe_meeting_url(text):
     return ""
 
 
+def _occurrence_end(occ_start, master_start, master_duration):
+    if type(occ_start) is type(master_start):
+        dur = master_duration
+    elif not isinstance(occ_start, dt.datetime):
+        dur = dt.timedelta(days=1)
+    else:
+        dur = dt.timedelta(hours=1)
+    try:
+        return occ_start + dur
+    except OverflowError:
+        return occ_start
+
+
 def events_from_calendar(text, range_start, range_end, zone=None):
     """Flatten one iCalendar object into occurrence dicts inside the range.
 
@@ -675,7 +710,7 @@ def events_from_calendar(text, range_start, range_end, zone=None):
         for comp in cal.children:
             if comp.name != "VEVENT":
                 continue
-            uid = comp.value("UID").strip() or ("nouid-" + str(id(comp)))
+            uid = comp.value("UID").strip()[:500] or ("nouid-" + str(id(comp)))
             if comp.get("RECURRENCE-ID"):
                 overrides.setdefault(uid, []).append(comp)
             else:
@@ -692,58 +727,70 @@ def events_from_calendar(text, range_start, range_end, zone=None):
             except IcsError:
                 continue
 
+        emitted_for_uid = 0
         if master is not None:
             try:
                 p = master.get("DTSTART")
                 start = parse_date_value(p.value, p.params, vtz)
             except (IcsError, AttributeError):
-                continue
-            end = _end_for(master, start, vtz)
-            duration = end - start
-            rrule = master.get("RRULE")
-            recurring = rrule is not None or bool(master.get_all("RDATE"))
-            if recurring:
-                # Look back by the event length so one already running counts.
-                lookback = duration if isinstance(duration, dt.timedelta) else dt.timedelta(0)
-                win_start = range_start - lookback
-                # One budget for the whole event: RDATE and EXDATE share the
-                # values read, RRULE and RDATE share the occurrences kept.
-                # Only exclusions near the window can match an occurrence.
-                values = [MAX_DATE_VALUES_PER_EVENT]
-                excluded = set()
-                margin = dt.timedelta(days=1)
-                for ex in iter_date_list(master.get_all("EXDATE"), vtz, values):
-                    if _in_range(ex, win_start - margin, range_end + margin):
-                        excluded.add(occurrence_key(ex))
-                starts = {}
+                start = None
+            if start is not None:
+                end = _end_for(master, start, vtz)
+                duration = end - start
+                rrule = master.get("RRULE")
+                recurring = rrule is not None or bool(master.get_all("RDATE"))
+                if recurring:
+                    # Look back by the event length so one already running counts.
+                    lookback = duration if isinstance(duration, dt.timedelta) else dt.timedelta(0)
+                    win_start = range_start - lookback
+                    # One budget for the whole event: RDATE and EXDATE share the
+                    # values read, DTSTART, RRULE and RDATE share the
+                    # occurrences kept. Only exclusions near the window can
+                    # match an occurrence.
+                    values = [MAX_DATE_VALUES_PER_EVENT]
+                    excluded = set()
+                    margin = dt.timedelta(days=1)
+                    for ex in iter_date_list(master.get_all("EXDATE"), vtz, values):
+                        if _in_range(ex, win_start - margin, range_end + margin, zone):
+                            excluded.add(occurrence_key(ex))
+                    starts = {}
 
-                def keep(value):
-                    key = occurrence_key(value)
-                    if key not in excluded:
-                        starts.setdefault(key, value)
+                    def keep(value):
+                        key = occurrence_key(value)
+                        if key not in excluded and key not in uid_overrides:
+                            starts.setdefault(key, value)
 
-                if rrule:
-                    for rs in expand_rrule(rrule.value, start, win_start, range_end):
-                        keep(rs)
-                if len(starts) < MAX_INSTANCES_PER_EVENT:
-                    for rd in iter_date_list(master.get_all("RDATE"), vtz, values):
-                        if _in_range(rd, win_start, range_end):
-                            keep(rd)
+                    if _in_range(start, win_start, range_end, zone):
+                        keep(start)
+                    if rrule:
+                        r_limit = MAX_INSTANCES_PER_EVENT + len(excluded) + len(uid_overrides)
+                        for rs in expand_rrule(rrule.value, start, win_start, range_end,
+                                               max_instances=r_limit, zone=zone):
+                            keep(rs)
                             if len(starts) >= MAX_INSTANCES_PER_EVENT:
                                 break
-                for key, s in sorted(starts.items(), key=lambda kv: _as_dt(kv[1], zone)):
-                    if key in uid_overrides:
-                        continue  # emitted from the override below
-                    rid_raw = _format_like(master.get("DTSTART"), s)
-                    occ = _occurrence(master, uid, s, s + duration, True, rid_raw, vtz, zone)
+                    if len(starts) < MAX_INSTANCES_PER_EVENT:
+                        for rd in iter_date_list(master.get_all("RDATE"), vtz, values):
+                            if _in_range(rd, win_start, range_end, zone):
+                                keep(rd)
+                                if len(starts) >= MAX_INSTANCES_PER_EVENT:
+                                    break
+                    for s in sorted(starts.values(), key=lambda v: _as_dt(v, zone)):
+                        rid_raw = _format_like(master.get("DTSTART"), s)
+                        occ = _occurrence(master, uid, s, _occurrence_end(s, start, duration),
+                                          True, rid_raw, vtz, zone)
+                        if occ and _overlaps(occ, range_start, range_end, zone):
+                            out.append(occ)
+                            emitted_for_uid += 1
+                else:
+                    occ = _occurrence(master, uid, start, end, False, "", vtz, zone)
                     if occ and _overlaps(occ, range_start, range_end, zone):
                         out.append(occ)
-            else:
-                occ = _occurrence(master, uid, start, end, False, "", vtz, zone)
-                if occ and _overlaps(occ, range_start, range_end, zone):
-                    out.append(occ)
+                        emitted_for_uid += 1
 
         for key, ov in uid_overrides.items():
+            if emitted_for_uid >= MAX_INSTANCES_PER_EVENT:
+                break
             if ov.value("STATUS").strip().upper() == "CANCELLED":
                 continue
             try:
@@ -757,6 +804,7 @@ def events_from_calendar(text, range_start, range_end, zone=None):
                               rid_params=rid.params if rid else None)
             if occ and _overlaps(occ, range_start, range_end, zone):
                 out.append(occ)
+                emitted_for_uid += 1
     out.sort(key=lambda o: (o["start_ms"], o["title"]))
     return out
 
@@ -874,33 +922,52 @@ def build_event(title, start, end, all_day=False, location="", description="",
 def add_exdate(text, uid, recurrence_id):
     """Exclude one occurrence from a series: add an EXDATE to the master,
     written in the same form as its DTSTART, and drop any override for it."""
+    uid = str(uid or "").strip()[:500]
+    recurrence_id = str(recurrence_id or "").strip()
     root = parse(text)
     vtz = _vtimezone_aliases(root)
     target_key = None
+    override_params = None
+    for cal in root.children:
+        if cal.name != "VCALENDAR":
+            continue
+        for comp in cal.children:
+            if comp.name == "VEVENT" and comp.value("UID").strip()[:500] == uid:
+                rid = comp.get("RECURRENCE-ID")
+                if rid is not None and rid.value.strip() == recurrence_id:
+                    try:
+                        target_key = occurrence_key(parse_date_value(rid.value, rid.params, vtz))
+                        override_params = dict(rid.params)
+                        break
+                    except IcsError:
+                        pass
+        if target_key is not None:
+            break
+
     found = False
     for cal in root.children:
         if cal.name != "VCALENDAR":
             continue
         keep = []
         for comp in cal.children:
-            if comp.name == "VEVENT" and comp.value("UID").strip() == uid:
+            if comp.name == "VEVENT" and comp.value("UID").strip()[:500] == uid:
                 rid = comp.get("RECURRENCE-ID")
                 if rid is None:
                     start = comp.get("DTSTART")
                     if start is None:
                         raise IcsError("no_dtstart")
-                    params = dict(start.params)
+                    params = override_params if override_params is not None else dict(start.params)
                     try:
                         if target_key is None:
                             target_key = occurrence_key(parse_date_value(
-                                recurrence_id, _rid_params(start.params, recurrence_id), vtz))
+                                recurrence_id, _rid_params(params, recurrence_id), vtz))
                     except IcsError:
                         raise IcsError("bad_recurrence_id")
                     head = "EXDATE"
-                    if "TZID" in params and not recurrence_id.endswith("Z"):
-                        head += ";TZID=" + _quote_param(params["TZID"])
                     if len(recurrence_id) == 8:
                         head += ";VALUE=DATE"
+                    elif "TZID" in params and not recurrence_id.endswith("Z"):
+                        head += ";TZID=" + _quote_param(params["TZID"])
                     line = head + ":" + recurrence_id
                     comp.props.append(Prop("EXDATE", {}, recurrence_id, line))
                     found = True
@@ -934,7 +1001,8 @@ def _rid_params(params, value):
 
 
 def _quote_param(value):
-    return '"' + value + '"' if any(c in value for c in ":;,") else value
+    cleaned = str(value).replace("\r", "").replace("\n", "").replace('"', "")
+    return '"' + cleaned + '"' if any(c in cleaned for c in ":;,") else cleaned
 
 
 def serialize(root):

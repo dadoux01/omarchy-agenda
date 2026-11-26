@@ -103,7 +103,7 @@ or removed later under **Accounts** (the people icon).
 | Sync now | middle click, or the sync icon | `s` |
 | Move through events | | `↑` `↓` (or `j` `k`) |
 | Show details | click the event | `Enter` |
-| Join the video call | **Join** | `j` on a selected event |
+| Join the video call | **Join** | `o` or `J` on a selected event |
 | Delete | **Delete** in the details | `Delete` or `x` |
 | Accounts / Settings | icons at the top | `a` / `,` |
 | Back / close | | `Esc` |

@@ -25,6 +25,8 @@ Item {
   Keys.onPressed: function(event) {
     if (event.key === Qt.Key_Escape) {
       root.chosen("cancel")
+    } else if (root.choices.length === 0) {
+      return
     } else if (event.key === Qt.Key_Up || event.key === Qt.Key_Left || event.key === Qt.Key_Backtab) {
       root.selectedIndex = (root.selectedIndex + root.choices.length - 1) % root.choices.length
     } else if (event.key === Qt.Key_Down || event.key === Qt.Key_Right || event.key === Qt.Key_Tab) {

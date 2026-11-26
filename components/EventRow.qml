@@ -95,8 +95,8 @@ Item {
 
       PlainLabel {
         id: titleText
-        width: parent.width - timeText.width - icons.width - Style.space(20)
-        text: root.event.title || "…"
+        width: parent.width - timeText.width - icons.width - (icons.width > 0 ? Style.space(20) : Style.space(10))
+        text: String(root.event.title || "…").replace(/[\r\n]+/g, " ")
         color: root.panel.fg
         font.family: root.panel.fontFamily
       }
@@ -164,7 +164,7 @@ Item {
           var bits = []
           if (root.event.recurring) bits.push(root.panel.strings.t("panel.recurring"))
           var n = (root.event.alarms || []).length
-          if (n > 0) bits.push(root.panel.strings.tn("panel.reminders", n).arg(n))
+          if (n > 0) bits.push(root.panel.strings.tn("panel.reminders", n).arg(Commons.I18n.formatNumber(n)))
           if (root.event.readOnly) bits.push(root.panel.strings.t("panel.readOnly"))
           if (root.event.accountLabel) bits.push(root.event.accountLabel + (root.event.calendarName ? " › " + root.event.calendarName : ""))
           return bits.join("  ·  ")

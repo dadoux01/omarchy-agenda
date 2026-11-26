@@ -174,23 +174,24 @@ class Engine:
                                            "color": caldav.normalize_color(str(cal.get("color", ""))),
                                            "enabled": True, "readOnly": bool(cal.get("readOnly"))})
             return list(accounts.values())
-        errors = self.cache.get("errors", {})
-        out = []
-        for acc in self.accounts:
-            out.append({
-                "id": acc["id"],
-                "provider": acc["provider"],
-                "kind": acc.get("kind", acc["provider"]),
-                "label": acc.get("label", ""),
-                "username": acc.get("username", ""),
-                "server": acc.get("server", ""),
-                "error": errors.get(acc["id"], ""),
-                "calendars": [{
-                    "id": c["id"], "name": c.get("name", ""), "color": c.get("color", ""),
-                    "enabled": bool(c.get("enabled", True)), "readOnly": bool(c.get("readOnly")),
-                } for c in acc["calendars"]],
-            })
-        return out
+        with self.lock:
+            errors = self.cache.get("errors", {})
+            out = []
+            for acc in self.accounts:
+                out.append({
+                    "id": acc["id"],
+                    "provider": acc["provider"],
+                    "kind": acc.get("kind", acc["provider"]),
+                    "label": acc.get("label", ""),
+                    "username": acc.get("username", ""),
+                    "server": acc.get("server", ""),
+                    "error": errors.get(acc["id"], ""),
+                    "calendars": [{
+                        "id": c["id"], "name": c.get("name", ""), "color": c.get("color", ""),
+                        "enabled": bool(c.get("enabled", True)), "readOnly": bool(c.get("readOnly")),
+                    } for c in acc["calendars"]],
+                })
+            return out
 
     def _account(self, account_id):
         for acc in self.accounts:
@@ -271,18 +272,21 @@ class Engine:
     def reconnect(self, account_id, cancel=None):
         """Sign a Google account in again after Google revoked its token
         (seven days in "Testing" mode, a password change, a revoke)."""
-        acc = self._account(account_id)
-        if acc["provider"] != "google":
-            raise EngineError("unknown_provider")
+        with self.lock:
+            acc = self._account(account_id)
+            if acc["provider"] != "google":
+                raise EngineError("unknown_provider")
+            old_secret = self._secret(acc)
+            login_hint = acc.get("username", "")
         try:
-            secret = PROVIDERS["google"].reconnect(self._secret(acc), cancel,
-                                                   login_hint=acc.get("username", ""))
+            secret = PROVIDERS["google"].reconnect(old_secret, cancel, login_hint=login_hint)
         except providers.ProviderError as exc:
             raise EngineError(exc.code, exc.detail)
         except net.NetError as exc:
             raise EngineError(exc.code, exc.detail)
-        marker = secrets.store(acc["id"], secret)
         with self.lock:
+            acc = self._account(account_id)
+            marker = secrets.store(acc["id"], secret)
             acc["secret"] = marker
             self._save_accounts()
             self.cache.get("errors", {}).pop(account_id, None)
@@ -353,7 +357,8 @@ class Engine:
                         if ckey in old:
                             fresh[ckey] = old[ckey]
                     continue
-                for cal in acc["calendars"]:
+                cals = acc["calendars"]
+                for idx, cal in enumerate(cals):
                     if not cal.get("enabled", True):
                         continue
                     ckey = acc["id"] + "|" + cal["id"]
@@ -378,6 +383,10 @@ class Engine:
                             fresh[ckey] = cached
                         if _code(exc) in ("auth_failed", "reauth_required", "missing_secret",
                                           "google_client_invalid"):
+                            for rest in cals[idx + 1:]:
+                                rkey = acc["id"] + "|" + rest["id"]
+                                if rkey in old:
+                                    fresh[rkey] = old[rkey]
                             break  # every calendar of this account would fail the same way
         finally:
             with self.lock:
@@ -502,12 +511,15 @@ class Engine:
         if end_ms <= start_ms or end_ms - start_ms > 366 * 86400 * 1000:
             raise EngineError("bad_time")
         reminders = []
-        for m in p.get("reminders", []) or []:
+        for m in (p.get("reminders", []) or [])[:10]:
             if isinstance(m, (int, float)) and not isinstance(m, bool) and 0 <= m <= 40320:
                 reminders.append(int(m))
         all_day = bool(p.get("allDay"))
-        start_date = dt.datetime.fromtimestamp(start_ms / 1000, self.zone).date()
-        end_date = dt.datetime.fromtimestamp(end_ms / 1000, self.zone).date()
+        try:
+            start_date = dt.datetime.fromtimestamp(start_ms / 1000, self.zone).date()
+            end_date = dt.datetime.fromtimestamp(end_ms / 1000, self.zone).date()
+        except (OverflowError, OSError, ValueError):
+            raise EngineError("bad_time")
         if end_date <= start_date:
             end_date = start_date + dt.timedelta(days=1)
         event = {

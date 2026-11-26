@@ -21,6 +21,7 @@ Column {
     userField.text = ""
     passField.text = ""
     serverField.text = ""
+    labelField.text = ""
     urlField.text = ""
     pathField.text = ""
   }
@@ -129,7 +130,11 @@ Column {
     width: root.width
     foreground: root.panel.fg
     font.family: root.panel.fontFamily
-    Keys.onEscapePressed: root.panel.setAddFlow({ step: "provider", error: "" })
+    Keys.onEscapePressed: function(event) {
+      event.accepted = true
+      root.reset()
+      root.panel.setAddFlow({ step: "provider", error: "" })
+    }
   }
 
   component Hint: PlainLabel {
@@ -174,7 +179,7 @@ Column {
       placeholderText: root.flow.kind === "icloud" ? root.panel.strings.t("add.password") : root.panel.strings.t("add.passwordGeneric")
       maximumLength: 1024
       inputMethodHints: Qt.ImhSensitiveData | Qt.ImhNoPredictiveText
-      onAccepted: if (userField.text && passField.text) root.connectPassword()
+      onAccepted: if (!root.panel.busy && userField.text.trim() !== "" && passField.text !== "") root.connectPassword()
     }
     Field {
       id: labelField
@@ -205,7 +210,7 @@ Column {
       placeholderText: root.panel.strings.t("add.icsUrl")
       maximumLength: 4000
       inputMethodHints: Qt.ImhUrlCharactersOnly | Qt.ImhNoAutoUppercase | Qt.ImhSensitiveData
-      onAccepted: if (text.trim()) root.connectIcs()
+      onAccepted: if (!root.panel.busy && text.trim()) root.connectIcs()
     }
     Hint { text: root.panel.strings.t("add.guideIcs") }
     Button {
@@ -259,7 +264,7 @@ Column {
       placeholderText: root.panel.strings.t("add.googlePath")
       maximumLength: 1000
       inputMethodHints: Qt.ImhNoAutoUppercase | Qt.ImhNoPredictiveText
-      onAccepted: if (text.trim()) root.connectGoogle(text.trim())
+      onAccepted: if (!root.panel.busy && text.trim()) root.connectGoogle(text.trim())
     }
 
     Row {

@@ -134,4 +134,17 @@ test("bar label fits the budget and keeps the time part", () => {
   assert.equal(M.fitLabel("%1 %2", ["14:30", "Dentiste"], 1, 24), "14:30 Dentiste")
   const tiny = M.fitLabel("%1 · jusqu'à %2", ["Bloc de travail", "18:00"], 0, 10)
   assert.ok(tiny.startsWith("Blo"), tiny)
+  const dollar = M.fitLabel("%1 in %2 min", ["Fix $& $$ $1 bug", 5], 0, 40)
+  assert.equal(dollar, "Fix $& $$ $1 bug in 5 min")
+})
+
+test("dst overnight range and null guards", () => {
+  // Europe/Paris springs forward on 2027-03-28 at 02:00 -> 03:00
+  const dstEve = new Date(2027, 2, 27, 12, 0).getTime()
+  const r = M.parseQuickAdd("Party 27/03/2027 23h-04h", dstEve)
+  assert.equal(fmt(r.start), "27/3 23:00")
+  assert.equal(fmt(r.end), "28/3 4:00")
+  assert.equal(M.focusEvent(null, NOW, H), null)
+  assert.equal(M.countOn(null, NOW), 0)
+  assert.deepEqual(M.groupByDay(null, NOW, 3).map(d => d.offset), [0])
 })

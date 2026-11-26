@@ -63,7 +63,7 @@ Column {
       if (!st || !et) { error = root.panel.strings.t("form.badTime"); return }
       start = Model.at(day, st)
       end = Model.at(day, et)
-      if (end <= start) end += Model.DAY
+      if (end <= start) end = Model.at(Model.addDays(day, 1), et)
     }
     var target = root.panel.calendarByKey(calendar.value)
     if (!target) { error = root.panel.strings.t("form.noCalendar"); return }
@@ -91,8 +91,8 @@ Column {
     foreground: root.panel.fg
     font.family: root.panel.fontFamily
     onActiveFocusChanged: if (activeFocus) root.panel.editing = true
-    Keys.onEscapePressed: root.panel.openPage("agenda")
-    onAccepted: root.submit()
+    Keys.onEscapePressed: function(event) { event.accepted = true; root.panel.openPage("agenda") }
+    onAccepted: if (!root.panel.busy && titleField.text.trim() !== "") root.submit()
   }
 
   component Caption: PlainLabel {

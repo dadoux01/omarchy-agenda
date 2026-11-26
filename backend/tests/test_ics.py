@@ -232,6 +232,49 @@ DTSTART:20261101T000000Z
 RRULE:FREQ=DAILY""", window(2026, 11, 1, 2030, 1, 1))
         self.assertEqual(len(got), ics.MAX_INSTANCES_PER_EVENT)
 
+    def test_rdate_comma_bomb_is_bounded(self):
+        # Issue #15910: huge comma-separated RDATE/EXDATE lists must stay bounded.
+        rdates = ",".join("202611%02dT090000Z" % (1 + (i % 28)) for i in range(60_000))
+        many_in_win = ",".join(
+            (dt.datetime(2026, 11, 1, 9, tzinfo=UTC) + dt.timedelta(minutes=i)).strftime("%Y%m%dT%H%M%SZ")
+            for i in range(6_000)
+        )
+        exdates = ",".join("20261101T090%d00Z" % (i % 10) for i in range(20_000))
+        text = wrap(vevent(f"UID:bomb\nDTSTART:20261101T090000Z\nRDATE:{rdates}\nRDATE:{many_in_win}\nEXDATE:{exdates}\nSUMMARY:Boom"))
+        occ = ics.events_from_calendar(text, *window(2026, 11, 1, 2026, 12, 1))
+        self.assertLessEqual(len(occ), ics.MAX_INSTANCES_PER_EVENT)
+        self.assertNotIn("2026-11-01 10:00", starts(occ))
+
+    def test_rrule_rdate_and_overrides_share_instance_cap(self):
+        base = vevent("UID:shared\nDTSTART:20261101T090000Z\nRRULE:FREQ=DAILY\nSUMMARY:Master")
+        overrides = "".join(
+            vevent(
+                "UID:shared\n"
+                f"RECURRENCE-ID:{(dt.datetime(2027, 6, 1, 9, tzinfo=UTC) + dt.timedelta(days=i)).strftime('%Y%m%dT%H%M%SZ')}\n"
+                f"DTSTART:{(dt.datetime(2027, 6, 1, 10, tzinfo=UTC) + dt.timedelta(days=i)).strftime('%Y%m%dT%H%M%SZ')}\n"
+                f"SUMMARY:Ov {i}"
+            )
+            for i in range(600)
+        )
+        occ = ics.events_from_calendar(wrap(base, overrides), *window(2026, 11, 1, 2032, 1, 1))
+        self.assertEqual(len(occ), ics.MAX_INSTANCES_PER_EVENT)
+
+    def test_line_cap_and_rfc5545_edge_cases(self):
+        with self.assertRaises(ics.IcsError):
+            ics.parse("X\n" * (ics.MAX_LINES + 1))
+
+        text = wrap(vevent("""UID:rfc
+DTSTART;VALUE=date:20261125
+RDATE;VALUE=DATE-TIME:20261126T000000Z/PT1H
+RRULE:FREQ=WEEKLY;BYDAY=MO,MO
+SUMMARY:Multi"""))
+        occ = ics.events_from_calendar(text, *window(2026, 11, 24, 2026, 12, 8), zone=PARIS)
+        # DTSTART (Wed 25) is included per RFC 5545, duplicate BYDAY=MO deduplicated, PERIOD ignored.
+        self.assertEqual([g[:10] for g in starts(occ, PARIS)], ["2026-11-25", "2026-11-30", "2026-12-07"])
+
+        with self.assertRaises(ics.IcsError):
+            ics.parse_date_value("20260230")
+
     def test_rdate_exdate_budget(self):
         # A huge RDATE list (every minute for ~6 months) and a huge EXDATE list:
         # occurrences stay capped and the lists are read only up to the budget.
@@ -302,6 +345,25 @@ SUMMARY:S moved"""))
     def test_add_exdate_unknown_uid(self):
         with self.assertRaises(ics.IcsError):
             ics.add_exdate(wrap(vevent("UID:a\nDTSTART:20261123T080000Z")), "zzz", "20261123T080000Z")
+
+    def test_add_exdate_override_with_different_tzid(self):
+        text = wrap(
+            vevent("UID:m\nDTSTART;TZID=Europe/Paris:20261123T090000\nRRULE:FREQ=DAILY;COUNT=2\nSUMMARY:M"),
+            vevent("UID:m\nRECURRENCE-ID;TZID=America/New_York:20261124T030000\n"
+                   "DTSTART;TZID=Europe/Paris:20261124T110000\nSUMMARY:Moved"),
+        )
+        updated = ics.add_exdate(text, "m", "20261124T030000")
+        self.assertIn("EXDATE;TZID=America/New_York:20261124T030000", updated)
+        occ = ics.events_from_calendar(updated, *window(2026, 11, 20, 2026, 12, 1))
+        self.assertEqual(starts(occ), ["2026-11-23 09:00"])
+
+    def test_long_uid_matches_add_exdate(self):
+        uid = "u" * 300
+        text = wrap(vevent(f"UID:{uid}\nDTSTART:20261123T080000Z\nRRULE:FREQ=DAILY;COUNT=2\nSUMMARY:Long"))
+        occ = ics.events_from_calendar(text, *window(2026, 11, 20, 2026, 12, 1))
+        self.assertEqual(occ[0]["uid"], uid)
+        updated = ics.add_exdate(text, occ[0]["uid"], occ[1]["recurrence_id"])
+        self.assertEqual(len(ics.events_from_calendar(updated, *window(2026, 11, 20, 2026, 12, 1))), 1)
 
 
 if __name__ == "__main__":

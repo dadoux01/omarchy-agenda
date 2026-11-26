@@ -120,9 +120,9 @@ Column {
     font.family: root.panel.fontFamily
     maximumLength: 300
     onActiveFocusChanged: root.panel.editing = activeFocus
-    Keys.onEscapePressed: { text = ""; root.panel.focusList() }
+    Keys.onEscapePressed: function(event) { event.accepted = true; text = ""; root.panel.focusList() }
     Keys.onTabPressed: root.panel.quickToForm(text)
-    onAccepted: root.panel.quickAdd(text)
+    onAccepted: if (!root.panel.busy && text.trim() !== "") root.panel.quickAdd(text)
   }
 
   PlainLabel {

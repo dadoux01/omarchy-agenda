@@ -10,6 +10,7 @@ import base64
 import re
 import urllib.parse
 import xml.etree.ElementTree as ET
+import xml.parsers.expat as expat
 
 from . import net
 
@@ -71,12 +72,21 @@ def basic_auth(username, password):
 
 
 def parse_xml(body):
-    head = body[:4096].lower()
-    if b"<!doctype" in head or b"<!entity" in body.lower():
+    parser = expat.ParserCreate()
+
+    def _forbid(*_args, **_kwargs):
         raise net.NetError("unsafe_xml")
+
+    parser.StartDoctypeDeclHandler = _forbid
+    parser.EntityDeclHandler = _forbid
+    parser.UnparsedEntityDeclHandler = _forbid
+    parser.ExternalEntityRefHandler = _forbid
     try:
+        parser.Parse(body, True)
         return ET.fromstring(body)
-    except ET.ParseError:
+    except net.NetError:
+        raise
+    except (expat.ExpatError, ET.ParseError):
         raise net.NetError("bad_xml")
 
 
@@ -120,6 +130,13 @@ class Client:
         net.raise_for_status(resp, ok)
         return resp
 
+    def _scoped_url(self, base, href):
+        target = urllib.parse.urljoin(base, href)
+        parts = urllib.parse.urlsplit(target)
+        if parts.scheme != "https" or not net.host_in_scope(parts.hostname or "", self.scope):
+            return ""
+        return target
+
     def _href_prop(self, url, body, prop_tag):
         resp = self.call("PROPFIND", url, body=body, depth=0)
         root = parse_xml(resp.body)
@@ -128,7 +145,9 @@ class Client:
             if el is not None:
                 href = el.findtext("d:href", default="", namespaces=NS).strip()
                 if href:
-                    return urllib.parse.urljoin(resp.url, href)
+                    target = self._scoped_url(resp.url, href)
+                    if target:
+                        return target
         return ""
 
     def principal(self):
@@ -170,7 +189,9 @@ class Client:
                 names = {c.get("name", "").upper() for c in comps.findall("c:comp", NS)}
                 if names and "VEVENT" not in names:
                     continue
-            url = urllib.parse.urljoin(resp.url, href)
+            url = self._scoped_url(resp.url, href)
+            if not url:
+                continue
             name = (props.get(_tag("d", "displayname")).text or "").strip() \
                 if props.get(_tag("d", "displayname")) is not None else ""
             color = ""
@@ -215,8 +236,11 @@ class Client:
             if data is None or not data.text:
                 continue
             etag_el = props.get(_tag("d", "getetag"))
+            item_href = self._scoped_url(resp.url, href)
+            if not item_href:
+                continue
             items.append({
-                "href": urllib.parse.urljoin(resp.url, href),
+                "href": item_href,
                 "etag": (etag_el.text or "").strip() if etag_el is not None else "",
                 "data": data.text,
             })

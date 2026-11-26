@@ -110,7 +110,7 @@ personnes).
 | Synchroniser | clic du milieu, ou l'icône de synchro | `s` |
 | Parcourir les événements | | `↑` `↓` (ou `j` `k`) |
 | Voir les détails | cliquer sur l'événement | `Entrée` |
-| Rejoindre la visio | **Rejoindre** | `j` sur l'événement sélectionné |
+| Rejoindre la visio | **Rejoindre** | `o` ou `J` sur l'événement sélectionné |
 | Supprimer | **Supprimer** dans les détails | `Suppr` ou `x` |
 | Comptes / Réglages | icônes en haut | `a` / `,` |
 | Retour / fermer | | `Échap` |

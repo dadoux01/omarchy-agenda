@@ -68,8 +68,9 @@ Panel {
     var out = []
     for (var i = 0; i < accounts.length; i++) {
       var a = accounts[i]
-      for (var j = 0; j < a.calendars.length; j++) {
-        var c = a.calendars[j]
+      var cals = a && Array.isArray(a.calendars) ? a.calendars : []
+      for (var j = 0; j < cals.length; j++) {
+        var c = cals[j]
         if (c.readOnly || !c.enabled) continue
         out.push({ key: a.id + "|" + c.id, accountId: a.id, calendarId: c.id,
                    label: accounts.length > 1 ? a.label + " › " + c.name : c.name })
@@ -80,9 +81,11 @@ Panel {
 
   readonly property bool multipleCalendars: {
     var n = 0
-    for (var i = 0; i < accounts.length; i++)
-      for (var j = 0; j < accounts[i].calendars.length; j++)
-        if (accounts[i].calendars[j].enabled) n++
+    for (var i = 0; i < accounts.length; i++) {
+      var cals = accounts[i] && Array.isArray(accounts[i].calendars) ? accounts[i].calendars : []
+      for (var j = 0; j < cals.length; j++)
+        if (cals[j].enabled) n++
+    }
     return n > 1
   }
 
@@ -137,13 +140,13 @@ Panel {
     return new Date(group.day).toLocaleDateString(locale, "dddd d MMMM")
   }
 
-  function errorText(code) {
+  function errorText(code, detail) {
     if (!code) return ""
     var key = "error." + code
     var text = strings.t(key, "")
-    if (text) return text
+    if (text) return text.indexOf("%1") !== -1 ? text.arg(detail || code) : text
     if (code === "backend_down") return strings.t("panel.backendDown")
-    return strings.t("error.generic").arg(code)
+    return strings.t("error.generic").arg(detail || code)
   }
 
   // ------------------------------------------------------------ lifecycle
@@ -175,14 +178,23 @@ Panel {
     if (p === "form" && writableCalendars.length === 0) p = accounts.length === 0 ? "add" : "agenda"
     if (!root.opened) root.open()
     editing = false
+    var alreadyForm = page === "form"
     page = p
-    if (p === "form") Qt.callLater(function() { var f = pageItem("form"); if (f) f.reset(root.pendingPreset); root.pendingPreset = null })
-    else if (p === "add") {
+    var content = panel.loadedContent
+    if (content && content.scrollerItem) content.scrollerItem.contentY = 0
+    if (p === "form") {
+      if (alreadyForm) {
+        Qt.callLater(function() {
+          var f = pageItem("form")
+          if (f) f.reset(root.pendingPreset)
+          root.pendingPreset = null
+        })
+      }
+    } else if (p === "add") {
       // A finished or abandoned flow starts over; one waiting on the browser
       // or on the choice of calendars is picked up where it was.
       if (addFlow.step !== "browser" && addFlow.step !== "calendars") addFlow = freshFlow
-    }
-    else Qt.callLater(focusList)
+    } else Qt.callLater(focusList)
   }
 
   function pageItem(name) {
@@ -247,12 +259,13 @@ Panel {
   // ------------------------------------------------------------ calls
 
   function call(op, params, done) {
-    if (!service) { if (done) done(false, errorText("backend_down")); return }
+    if (!service) { if (done) done(false, errorText("backend_down", ""), "backend_down"); return }
     busyCount++
     service.request(op, params, function(msg) {
       busyCount = Math.max(0, busyCount - 1)
       var code = msg.ok ? "" : (msg.error ? String(msg.error.code) : "internal")
-      if (done) done(msg.ok === true, msg.ok ? msg.result : errorText(code), code)
+      var detail = !msg.ok && msg.error && msg.error.detail ? String(msg.error.detail) : ""
+      if (done) done(msg.ok === true, msg.ok ? msg.result : errorText(code, detail), code)
     })
   }
 
@@ -306,6 +319,7 @@ Panel {
   readonly property var freshFlow: ({ step: "provider", kind: "", error: "", token: "", found: [], chosen: ({}), label: "" })
   property var addFlow: freshFlow
   property var clientFiles: []
+  property int loginAttemptId: 0
 
   function setAddFlow(patch) {
     var next = {}
@@ -323,8 +337,10 @@ Panel {
 
   function connectAccount(params) {
     var browser = params.kind === "google"
+    var attempt = ++root.loginAttemptId
     setAddFlow({ error: "", step: browser ? "browser" : addFlow.step })
     call("connect", params, function(ok, result, code) {
+      if (attempt !== root.loginAttemptId) return
       if (!ok) {
         setAddFlow({ step: "credentials", error: code === "cancelled" ? "" : result })
         return
@@ -340,6 +356,7 @@ Panel {
   }
 
   function cancelLogin() {
+    root.loginAttemptId++
     if (service) service.request("cancelLogin", {}, null)
     setAddFlow({ step: "credentials", error: "" })
   }
@@ -391,7 +408,7 @@ Panel {
   }
 
   function askRemoveAccount(acc) {
-    confirm.ask(strings.t("accounts.removeConfirm").arg(acc.label), [
+    confirm.ask(strings.t("accounts.removeConfirm").arg(acc.label || acc.username || "…"), [
       { id: "remove", label: strings.t("accounts.remove"), destructive: true },
       { id: "cancel", label: strings.t("panel.cancel"), destructive: false }
     ], function(choice) {
@@ -443,6 +460,7 @@ Panel {
       property alias agendaLoader: agendaLoader
       property alias formLoader: formLoader
       property alias addLoader: addLoader
+      property alias scrollerItem: scroller
       implicitHeight: Math.min(pages.implicitHeight, Style.space(760))
       anchors.fill: parent
       blocked: root.page !== "agenda" || root.editing || confirm.opened
@@ -462,7 +480,7 @@ Panel {
         else if (t === ",") root.openPage("settings")
         else if (t === "/" || t === "q") {
           if (agendaLoader.item && agendaLoader.item.quickField.visible) agendaLoader.item.quickField.forceActiveFocus()
-        } else if (t === "j" || t === "J") {
+        } else if (t === "o" || t === "J") {
           var ev = root.selectedEvent()
           if (ev) root.join(ev)
         }
@@ -474,6 +492,7 @@ Panel {
         if (confirm.opened) confirm.answer("cancel")
         else if (root.page !== "agenda") root.openPage("agenda")
         else root.close()
+        event.accepted = true
       }
 
       Flickable {
@@ -502,7 +521,10 @@ Panel {
             active: root.page === "form"
             visible: active
             sourceComponent: EventForm { panel: root; width: formLoader.width }
-            onLoaded: item.reset(root.pendingPreset)
+            onLoaded: {
+              item.reset(root.pendingPreset)
+              root.pendingPreset = null
+            }
           }
           Loader {
             id: accountsLoader

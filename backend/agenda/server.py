@@ -94,6 +94,7 @@ class Server:
         self.login_lock = threading.Lock()
         self.live_notifications = 0
         self.live_lock = threading.Lock()
+        self.closing = threading.Event()
         state = storage.read_json(storage.state_path(FIRED_FILE), {})
         state = state if isinstance(state, dict) else {}
         self.fired = state.get("fired", {}) if isinstance(state.get("fired"), dict) else {}
@@ -104,24 +105,27 @@ class Server:
     # ------------------------------------------------------------ output
 
     def emit(self, obj):
+        if self.closing.is_set():
+            return
         line = json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
         with self.out_lock:
             try:
                 self.out.write(line + "\n")
                 self.out.flush()
-            except (BrokenPipeError, ValueError):
-                os._exit(0)
+            except (BrokenPipeError, OSError, ValueError):
+                self.closing.set()
 
     def snapshot(self):
         eng = self.engine
-        return {
-            "version": VERSION,
-            "accounts": eng.public_accounts(),
-            "events": eng.events(),
-            "settings": dict(eng.settings),
-            "syncing": eng.syncing,
-            "syncedAt": eng.cache.get("syncedAt", 0),
-        }
+        with eng.lock:
+            return {
+                "version": VERSION,
+                "accounts": eng.public_accounts(),
+                "events": eng.events(),
+                "settings": dict(eng.settings),
+                "syncing": eng.syncing,
+                "syncedAt": eng.cache.get("syncedAt", 0),
+            }
 
     def push_state(self):
         self.emit({"event": "state", "state": self.snapshot()})
@@ -186,7 +190,11 @@ class Server:
             self.push_state()
             return settings
         if op == "snooze":
-            self.snooze(str(p.get("key", "")), int(p.get("minutes", 5) or 5))
+            try:
+                mins = int(p.get("minutes", 5) or 5)
+            except (TypeError, ValueError):
+                mins = 5
+            self.snooze(str(p.get("key", "")), max(1, min(1440, mins)))
             return {}
         if op == "testNotification":
             self.notify(self.strings["app"], fill(self.strings["inMinutes"], 10), [], None)
@@ -213,8 +221,13 @@ class Server:
             if rid is not None:
                 self.emit({"id": rid, "ok": False,
                            "error": {"code": exc.code, "detail": str(exc.detail)[:300]}})
+        except storage.StorageError as exc:
+            if rid is not None:
+                code = "corrupt_secrets" if str(exc) == "corrupt_secrets" else "storage"
+                self.emit({"id": rid, "ok": False,
+                           "error": {"code": code, "detail": str(exc)[:300]}})
         except Exception as exc:  # never let one bad request kill the helper
-            sys.stderr.write("agenda: %s failed: %r\n" % (req.get("op"), exc))
+            sys.stderr.write("agenda: %s failed: %s\n" % (req.get("op"), type(exc).__name__))
             if rid is not None:
                 self.emit({"id": rid, "ok": False,
                            "error": {"code": "internal", "detail": type(exc).__name__}})
@@ -247,8 +260,10 @@ class Server:
 
     def scheduler(self):
         last_tick = time.time()
-        while True:
+        while not self.closing.is_set():
             self.sync_requested.wait(TICK_SECONDS)
+            if self.closing.is_set():
+                break
             forced = self.sync_requested.is_set()
             self.sync_requested.clear()
             now = time.time()
@@ -259,7 +274,7 @@ class Server:
             try:
                 self.tick(now, resumed or forced)
             except Exception as exc:
-                sys.stderr.write("agenda: scheduler: %r\n" % (exc,))
+                sys.stderr.write("agenda: scheduler: %s\n" % (type(exc).__name__,))
 
     def sync_interval(self, now_ms, events):
         minutes = int(self.engine.settings.get("syncMinutes", 10))
@@ -309,11 +324,11 @@ class Server:
             return
         self.recap_pending = False
         today = dt.datetime.now(self.engine.zone).date()
-        if self.last_recap_day == today.isoformat():
-            return
         if not self.engine.settings.get("dailyRecap", True) or not self.engine.accounts:
             return
         with self.state_lock:
+            if self.last_recap_day == today.isoformat():
+                return
             self.last_recap_day = today.isoformat()
             self.save_state()
         self.send_recap(today, events)
@@ -327,6 +342,8 @@ class Server:
         at = int(time.time() * 1000) + minutes * 60 * 1000
         with self.state_lock:
             self.snoozes.append({"key": "snooze|%s|%d" % (event_key, at), "eventKey": event_key, "at": at})
+            if len(self.snoozes) > 100:
+                self.snoozes = self.snoozes[-100:]
             self.save_state()
 
     # ------------------------------------------------------------ notifications
@@ -468,6 +485,8 @@ class Server:
         # stdin closed: the shell went away. Finish what was asked, then exit.
         self.requests.put(None)
         worker.join(timeout=30)
+        self.closing.set()
+        self.sync_requested.set()
 
 
 def open_url(url):

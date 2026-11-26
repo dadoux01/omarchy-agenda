@@ -156,6 +156,8 @@
   "error.rate_limited": "The server asks to slow down. Try again in a minute.",
   "error.server_error": "The server had a problem. Try again later.",
   "error.unknown_event": "That event is gone. It may have been deleted elsewhere.",
+  "error.corrupt_secrets": "The saved passwords file is damaged. Fix or remove secrets.json in the agenda state folder, then try again.",
+  "error.storage": "Can't write the agenda files (%1).",
   "error.generic": "Something went wrong (%1).",
   "notify.app": "Agenda",
   "notify.inMinutes": "In %1 min",

@@ -11,6 +11,7 @@ holding calendar passwords, so redirects are followed here by hand:
 """
 
 import http.client
+import ipaddress
 import socket
 import ssl
 import urllib.parse
@@ -20,6 +21,22 @@ from . import USER_AGENT
 MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 MAX_REDIRECTS = 5
 REDIRECT_CODES = (301, 302, 303, 307, 308)
+
+# Multi-host provider domains whose per-user regional endpoints live under
+# subdomains (e.g. caldav.icloud.com -> p42-caldav.icloud.com).
+MULTI_HOST_SCOPES = (
+    "icloud.com",
+    "googleapis.com",
+    "googleusercontent.com",
+    "yahoo.com",
+    "fastmail.com",
+    "zoho.com",
+    "zoho.eu",
+    "mailbox.org",
+    "gmx.net",
+    "gmx.com",
+    "web.de",
+)
 
 
 class NetError(Exception):
@@ -49,15 +66,64 @@ class Response:
 def auth_scope(url):
     """The domain credentials for `url` may be sent to.
 
-    caldav.icloud.com -> icloud.com, so the per-user p42-caldav.icloud.com
-    host iCloud redirects to is covered, while a redirect to another domain
-    is not. A two-label host is its own scope.
+    Known multi-host providers (e.g. caldav.icloud.com -> icloud.com) allow
+    sibling endpoints under the provider domain; all other hosts stay exact
+    so sibling tenants on shared hosting or public-suffix domains cannot steal
+    credentials on redirect.
     """
     host = (urllib.parse.urlsplit(url).hostname or "").lower().rstrip(".")
-    labels = host.split(".")
-    if len(labels) >= 3:
-        return ".".join(labels[1:])
+    for suffix in MULTI_HOST_SCOPES:
+        if host == suffix or host.endswith("." + suffix):
+            return suffix
     return host
+
+
+def _host_detail(url):
+    return (urllib.parse.urlsplit(url).hostname or "").lower()
+
+
+def _is_internal_ip(ip):
+    return (ip.is_private or ip.is_loopback or ip.is_link_local
+            or ip.is_multicast or ip.is_reserved or ip.is_unspecified)
+
+
+def _is_internal_host(host, resolve=False):
+    """True for a host on the local machine or network.
+
+    With `resolve`, a name is looked up too, so a public name pointing at a
+    private address counts. That is best effort: the lookup is not pinned
+    for the connection that follows.
+    """
+    h = (host or "").strip("[]").lower().rstrip(".")
+    if not h or h == "localhost" or h.endswith(".localhost") or h.endswith(".local"):
+        return True
+    try:
+        return _is_internal_ip(ipaddress.ip_address(h))
+    except ValueError:
+        pass
+    if not resolve:
+        return False
+    try:
+        infos = socket.getaddrinfo(h, 443, type=socket.SOCK_STREAM)
+    except (OSError, UnicodeError):
+        return False  # the connection will fail on its own
+    for info in infos:
+        try:
+            if _is_internal_ip(ipaddress.ip_address(info[4][0].split("%", 1)[0])):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _clean_headers(headers):
+    out = {}
+    for k, v in (headers or {}).items():
+        ks = str(k).replace("\r", "").replace("\n", "").replace("\x00", "")
+        vs = str(v).replace("\r", "").replace("\n", "").replace("\x00", "")
+        if ks:
+            out[ks] = vs
+    return out
 
 
 def host_in_scope(host, scope):
@@ -87,11 +153,18 @@ def request(method, url, headers=None, body=None, auth=None, scope=None,
         scope = auth_scope(url)
     ctx = _ssl_context()
 
-    for _ in range(MAX_REDIRECTS + 1):
+    initial_host = _host_detail(url)
+    # A server on the local network may redirect within it; a public one may
+    # not send the request (and its credentials) there.
+    initial_internal = _is_internal_host(initial_host)
+    for hop in range(MAX_REDIRECTS + 1):
         parts = urllib.parse.urlsplit(url)
         if parts.scheme != "https" or not parts.hostname:
-            raise NetError("insecure_url", url)
+            raise NetError("insecure_url", _host_detail(url))
         host = parts.hostname
+        if (hop > 0 and not initial_internal and host.lower() != initial_host
+                and _is_internal_host(host, resolve=True)):
+            raise NetError("insecure_url", host)
         port = parts.port or 443
         path = parts.path or "/"
         if parts.query:
@@ -99,9 +172,9 @@ def request(method, url, headers=None, body=None, auth=None, scope=None,
 
         send_headers = {"User-Agent": USER_AGENT, "Accept-Encoding": "identity"}
         if headers:
-            send_headers.update(headers)
+            send_headers.update(_clean_headers(headers))
         if auth and host_in_scope(host, scope):
-            send_headers["Authorization"] = auth
+            send_headers["Authorization"] = _clean_headers({"Authorization": auth})["Authorization"]
 
         conn = http.client.HTTPSConnection(host, port, timeout=timeout, context=ctx)
         try:
@@ -111,13 +184,14 @@ def request(method, url, headers=None, body=None, auth=None, scope=None,
             resp_headers = {k.lower(): v for k, v in resp.getheaders()}
             if status in REDIRECT_CODES and resp_headers.get("location"):
                 resp.read(64 * 1024)
-                url = urllib.parse.urljoin(url, resp_headers["location"])
+                loc = resp_headers["location"].replace("\r", "").replace("\n", "").strip()
+                url = urllib.parse.urljoin(url, loc)
                 if status == 303:
                     method, body = "GET", None
                 continue
             data = resp.read(max_bytes + 1)
             if len(data) > max_bytes:
-                raise NetError("response_too_large", url)
+                raise NetError("response_too_large", host)
             return Response(status, resp_headers, data, url)
         except NetError:
             raise
@@ -129,7 +203,7 @@ def request(method, url, headers=None, body=None, auth=None, scope=None,
             raise NetError("network", str(exc))
         finally:
             conn.close()
-    raise NetError("too_many_redirects", url)
+    raise NetError("too_many_redirects", _host_detail(url))
 
 
 def raise_for_status(resp, ok=(200, 201, 204, 207)):
@@ -140,7 +214,7 @@ def raise_for_status(resp, ok=(200, 201, 204, 207)):
     if resp.status == 403:
         raise NetError("forbidden", status=403)
     if resp.status == 404:
-        raise NetError("not_found", resp.url, status=404)
+        raise NetError("not_found", _host_detail(resp.url), status=404)
     if resp.status == 412:
         raise NetError("conflict", status=412)
     if resp.status == 429:

@@ -30,6 +30,7 @@ function overlapsDay(ev, dayStart, dayEnd) {
 // Days from today, each with the events touching it. Ended events of today
 // stay in the list (dimmed by the panel); empty days are dropped except today.
 function groupByDay(events, nowMs, days) {
+  events = Array.isArray(events) ? events : []
   var out = []
   var today = startOfDay(nowMs)
   for (var i = 0; i < days; i++) {
@@ -50,6 +51,7 @@ function groupByDay(events, nowMs, days) {
 // The event the bar should talk about: one running now, else the next one
 // starting within `horizonMs`. All-day events never take the bar.
 function focusEvent(events, nowMs, horizonMs) {
+  if (!Array.isArray(events) || events.length === 0) return null
   var running = null
   var next = null
   for (var i = 0; i < events.length; i++) {
@@ -69,6 +71,7 @@ function focusEvent(events, nowMs, horizonMs) {
 }
 
 function countOn(events, dayMs) {
+  if (!Array.isArray(events)) return 0
   var de = addDays(dayMs, 1)
   var n = 0
   for (var i = 0; i < events.length; i++) if (overlapsDay(events[i], dayMs, de)) n++
@@ -238,7 +241,7 @@ function parseQuickAdd(text, nowMs) {
   var end
   if (times.length > 1) {
     end = new Date(date.getFullYear(), date.getMonth(), date.getDate(), times[1].h, times[1].m).getTime()
-    if (end <= start) end += DAY
+    if (end <= start) end = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1, times[1].h, times[1].m).getTime()
   } else {
     end = start + HOUR
   }
@@ -322,5 +325,5 @@ function fitLabel(template, args, titleIndex, max) {
   a[titleIndex] = marker
   var base = fill(template, a)
   var budget = Math.max(4, max - (base.length - 1))
-  return base.replace(marker, truncate(args[titleIndex], budget))
+  return base.replace(marker, function() { return truncate(args[titleIndex], budget) })
 }

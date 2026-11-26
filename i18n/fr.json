@@ -156,6 +156,8 @@
   "error.rate_limited": "Le serveur demande de ralentir. Réessaie dans une minute.",
   "error.server_error": "Le serveur a un problème. Réessaie plus tard.",
   "error.unknown_event": "Cet événement n'existe plus. Il a peut-être été supprimé ailleurs.",
+  "error.corrupt_secrets": "Le fichier des mots de passe enregistrés est abîmé. Répare ou supprime secrets.json dans le dossier d'état de l'agenda, puis réessaie.",
+  "error.storage": "Impossible d'écrire les fichiers de l'agenda (%1).",
   "error.generic": "Un problème est survenu (%1).",
   "notify.app": "Agenda",
   "notify.inMinutes": "Dans %1 min",

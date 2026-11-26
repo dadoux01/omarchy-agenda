@@ -5,6 +5,7 @@ on stdin, never on the command line, so it does not show up in `ps`.
 accounts.json only ever holds the marker "@keyring" or "@file".
 """
 
+import os
 import shutil
 import subprocess
 
@@ -74,11 +75,18 @@ def delete(account_id):
     _file_delete(account_id)
 
 
+_MISSING = object()
+
+
 def _file_store(account_id, secret):
     path = storage.state_path(SECRETS_FILE)
-    data = storage.read_json(path, {})
-    if not isinstance(data, dict):
+    data = storage.read_json(path, _MISSING)
+    if data is _MISSING:
+        if os.path.exists(path) or os.path.islink(path):
+            raise storage.StorageError("corrupt_secrets")
         data = {}
+    elif not isinstance(data, dict):
+        raise storage.StorageError("corrupt_secrets")
     data[account_id] = secret
     storage.write_json(path, data)
 

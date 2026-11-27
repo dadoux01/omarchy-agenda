@@ -286,10 +286,14 @@ class GoogleEngineTests(IsolatedDirs):
                               "start": start, "end": start + 3600000, "reminders": [10, 60]})
             eng.create_event({"accountId": acc["id"], "calendarId": "me@gmail.com", "title": "Off",
                               "start": start, "end": start + 1, "allDay": True})
+            eng.create_event({"accountId": acc["id"], "calendarId": "me@gmail.com", "title": "Sport",
+                              "start": start, "end": start + 3600000, "repeat": "weekly"})
         self.assertEqual(bodies[0]["start"], {"dateTime": "2026-11-26T14:00:00+01:00", "timeZone": "Europe/Paris"})
         self.assertEqual(bodies[0]["reminders"]["overrides"],
                          [{"method": "popup", "minutes": 10}, {"method": "popup", "minutes": 60}])
         self.assertEqual((bodies[1]["start"], bodies[1]["end"]), ({"date": "2026-11-26"}, {"date": "2026-11-27"}))
+        self.assertNotIn("recurrence", bodies[0])
+        self.assertEqual(bodies[2]["recurrence"], ["RRULE:FREQ=WEEKLY"])
 
     def test_revoked_token_is_reported(self):
         eng = engine.Engine()

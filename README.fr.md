@@ -14,7 +14,9 @@ d'origine n'est pas modifiée.
   calendrier et un bouton Rejoindre pour Meet, Zoom, Teams et les autres
   liens de visio.
 - **Ajouter et supprimer des événements** : ajout rapide (« Dentiste demain
-  14h-15h ») ou formulaire complet. Pour un événement récurrent, le plugin
+  14h-15h ») ou formulaire complet. Le formulaire peut répéter l'événement
+  (tous les jours, jours ouvrés, chaque semaine, mois ou année), sans fin ou
+  jusqu'à une date. Pour un événement récurrent, le plugin
   demande s'il faut supprimer cet événement seulement ou toute la série.
 - **Rappels synchronisés** : les rappels réglés sur chaque événement (sur le
   téléphone, sur le web ou ici) deviennent des notifications sur le bureau.

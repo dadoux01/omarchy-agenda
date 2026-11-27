@@ -319,6 +319,24 @@ class WriteTests(unittest.TestCase):
         occ = ics.events_from_calendar(text, *window(2026, 12, 1, 2027, 1, 1))[0]
         self.assertTrue(occ["all_day"])
 
+    def test_build_recurring_keeps_local_time(self):
+        start = dt.datetime(2026, 10, 19, 9, 0, tzinfo=PARIS)
+        _, text = ics.build_event("Stand-up", start, start + dt.timedelta(minutes=15),
+                                  rrule="FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR", zone=PARIS)
+        self.assertIn("DTSTART;TZID=Europe/Paris:20261019T090000", text)
+        self.assertIn("RRULE:FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR", text)
+        occs = ics.events_from_calendar(text, *window(2026, 10, 23, 2026, 10, 28))
+        # Across the October DST change, still 09:00 local, weekdays only.
+        self.assertEqual(starts(occs), ["2026-10-23 09:00", "2026-10-26 09:00", "2026-10-27 09:00"])
+        self.assertTrue(all(o["recurring"] for o in occs))
+
+    def test_build_recurring_all_day_until(self):
+        _, text = ics.build_event("Anniv", dt.date(2026, 11, 27), dt.date(2026, 11, 28), all_day=True,
+                                  rrule="FREQ=DAILY;UNTIL=20261129", zone=PARIS)
+        self.assertIn("DTSTART;VALUE=DATE:20261127", text)
+        occs = ics.events_from_calendar(text, *window(2026, 11, 1, 2026, 12, 31))
+        self.assertEqual(len(occs), 3)
+
     def test_add_exdate_tzid(self):
         text = wrap(vevent("""UID:s
 DTSTART;TZID=Europe/Paris:20261123T090000

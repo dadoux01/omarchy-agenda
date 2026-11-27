@@ -351,6 +351,23 @@ class EngineTests(IsolatedDirs):
                 eng.create_event(dict(base, **bad))
             self.assertEqual(ctx.exception.code, code)
 
+    def test_rrule_from_repeat(self):
+        eng = engine.Engine()
+        eng.zone = PARIS
+        start = int(dt.datetime(2026, 11, 26, 14, tzinfo=PARIS).timestamp() * 1000)
+        until = int(dt.datetime(2026, 12, 31, tzinfo=PARIS).timestamp() * 1000)
+        self.assertEqual(eng._rrule({}, start, False), "")
+        self.assertEqual(eng._rrule({"repeat": "weekly"}, start, False), "FREQ=WEEKLY")
+        self.assertEqual(eng._rrule({"repeat": "daily", "until": until}, start, False),
+                         "FREQ=DAILY;UNTIL=20261231T225959Z")
+        self.assertEqual(eng._rrule({"repeat": "yearly", "until": until}, start, True),
+                         "FREQ=YEARLY;UNTIL=20261231")
+        for bad in ({"repeat": "hourly"}, {"repeat": "daily", "until": start - 2 * 86400000},
+                    {"repeat": "daily", "until": "x"}):
+            with self.assertRaises(engine.EngineError) as ctx:
+                eng._rrule(bad, start, False)
+            self.assertEqual(ctx.exception.code, "bad_repeat")
+
     def test_settings_validated(self):
         eng = engine.Engine()
         s = eng.set_settings({"syncMinutes": 0, "reminders": "yes", "agendaDays": 9999, "bogus": 1})

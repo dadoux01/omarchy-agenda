@@ -880,9 +880,15 @@ def _fmt_utc(value):
 
 
 def build_event(title, start, end, all_day=False, location="", description="",
-                reminders_minutes=(), uid=None, now=None):
+                reminders_minutes=(), uid=None, now=None, rrule="", zone=None):
     """A complete VCALENDAR with one VEVENT. Times are written in UTC so no
-    VTIMEZONE is needed; all-day events use VALUE=DATE."""
+    VTIMEZONE is needed; all-day events use VALUE=DATE.
+
+    A recurring timed event is the exception: its start is written in local
+    time with the IANA TZID of `zone`, so the series keeps its wall-clock
+    time across daylight saving changes and BYDAY falls on local weekdays.
+    The TZID is left to the server's own zone database, as Apple Calendar
+    and most CalDAV servers do."""
     uid = uid or (uuid.uuid4().hex + "@dadoux01.agenda")
     now = now or dt.datetime.now(UTC)
     lines = [
@@ -900,8 +906,16 @@ def build_event(title, start, end, all_day=False, location="", description="",
         lines.append("DTSTART;VALUE=DATE:" + start.strftime("%Y%m%d"))
         lines.append("DTEND;VALUE=DATE:" + end.strftime("%Y%m%d"))
     else:
-        lines.append("DTSTART:" + _fmt_utc(start))
-        lines.append("DTEND:" + _fmt_utc(end))
+        tzid = getattr(zone, "key", "") if rrule else ""
+        if tzid and tzid != "UTC":
+            fmt = "%Y%m%dT%H%M%S"
+            lines.append("DTSTART;TZID=%s:%s" % (tzid, start.astimezone(zone).strftime(fmt)))
+            lines.append("DTEND;TZID=%s:%s" % (tzid, end.astimezone(zone).strftime(fmt)))
+        else:
+            lines.append("DTSTART:" + _fmt_utc(start))
+            lines.append("DTEND:" + _fmt_utc(end))
+    if rrule:
+        lines.append("RRULE:" + rrule)
     lines.append("SUMMARY:" + escape_text(title))
     if location:
         lines.append("LOCATION:" + escape_text(location))

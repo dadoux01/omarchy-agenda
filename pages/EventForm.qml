@@ -16,6 +16,25 @@ Column {
   spacing: Style.space(8)
 
   readonly property var reminderChoices: [-1, 0, 5, 10, 15, 30, 60, 120, 1440, 2880]
+  readonly property var repeatChoices: ["", "daily", "weekdays", "weekly", "monthly", "yearly"]
+
+  // The day the series starts on, for labels like "Weekly on Thursday".
+  readonly property double repeatDay: {
+    var d = Model.parseDateField(dateField.text)
+    return isNaN(d) ? Date.now() : d
+  }
+
+  function repeatLabel(r) {
+    var s = root.panel.strings
+    var day = new Date(root.repeatDay)
+    var loc = root.panel.locale
+    if (r === "") return s.t("form.repeatNone")
+    if (r === "daily") return s.t("form.repeatDaily")
+    if (r === "weekdays") return s.t("form.repeatWeekdays")
+    if (r === "weekly") return s.t("form.repeatWeekly").arg(day.toLocaleDateString(loc, "dddd"))
+    if (r === "monthly") return s.t("form.repeatMonthly").arg(day.getDate())
+    return s.t("form.repeatYearly").arg(day.toLocaleDateString(loc, "d MMMM"))
+  }
 
   function reminderLabel(m) {
     var s = root.panel.strings
@@ -40,6 +59,8 @@ Column {
     endField.text = Model.timeFieldText(end)
     locationField.text = ""
     notesField.text = ""
+    repeat.value = ""
+    untilField.text = ""
     var def = Number(root.panel.settingsValue("defaultReminderMinutes", 10))
     reminder.value = String(root.reminderChoices.indexOf(def) !== -1 ? def : 10)
     calendar.value = root.panel.defaultCalendarKey
@@ -65,10 +86,18 @@ Column {
       end = Model.at(day, et)
       if (end <= start) end = Model.at(Model.addDays(day, 1), et)
     }
+    var until = ""
+    if (repeat.value !== "" && untilField.text.trim() !== "") {
+      until = Model.parseDateField(untilField.text)
+      if (isNaN(until)) { error = root.panel.strings.t("form.badDate"); return }
+      if (until < day) { error = root.panel.strings.t("form.untilBeforeStart"); return }
+    }
     var target = root.panel.calendarByKey(calendar.value)
     if (!target) { error = root.panel.strings.t("form.noCalendar"); return }
     var m = Number(reminder.value)
     root.panel.createEvent({
+      repeat: repeat.value,
+      until: until,
       accountId: target.accountId,
       calendarId: target.calendarId,
       title: titleField.text,
@@ -146,6 +175,27 @@ Column {
       spacing: Style.space(3)
       Caption { text: root.panel.strings.t("form.end") }
       Field { id: endField; width: parent.width; maximumLength: 8 }
+    }
+  }
+
+  Dropdown {
+    id: repeat
+    width: root.width
+    label: root.panel.strings.t("form.repeat")
+    options: root.repeatChoices.map(function(r) { return { value: r, label: root.repeatLabel(r) } })
+    fontFamily: root.panel.fontFamily
+    onChanged: function(v) { repeat.value = v }
+  }
+
+  Column {
+    visible: repeat.value !== ""
+    width: root.width
+    spacing: Style.space(3)
+    Caption { text: root.panel.strings.t("form.until") }
+    Field {
+      id: untilField
+      placeholderText: root.panel.strings.t("form.untilNever")
+      maximumLength: 10
     }
   }
 

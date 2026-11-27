@@ -554,7 +554,9 @@ class GoogleProvider:
         else:
             start = {"dateTime": dt.datetime.fromtimestamp(p["start_ms"] / 1000, zone).isoformat()}
             end = {"dateTime": dt.datetime.fromtimestamp(p["end_ms"] / 1000, zone).isoformat()}
-            tzname = getattr(zone, "key", "")
+            # A recurring event needs a time zone to expand in; fall back to
+            # UTC when the local zone has no IANA name.
+            tzname = getattr(zone, "key", "") or ("UTC" if p.get("rrule") else "")
             if tzname:
                 start["timeZone"] = end["timeZone"] = tzname
         body = {
@@ -568,6 +570,8 @@ class GoogleProvider:
             body["location"] = p["location"]
         if p["description"]:
             body["description"] = p["description"]
+        if p.get("rrule"):
+            body["recurrence"] = ["RRULE:" + p["rrule"]]
         session.call("POST", _cal_path(cal["id"]) + "/events", body=body, ok=(200,))
 
     def delete(self, session, acc, cal, ev, scope):

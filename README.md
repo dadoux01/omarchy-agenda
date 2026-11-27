@@ -12,7 +12,9 @@ built-in clock untouched.
 - **Agenda popup**: today and the next days, colour-coded per calendar, with
   a Join button for Meet, Zoom, Teams and other video links.
 - **Add and delete events**: quick add ("Dentist tomorrow 2pm-3pm",
-  "Dentiste demain 14h-15h") or a full form. Deleting a repeating event asks
+  "Dentiste demain 14h-15h") or a full form. The form can make the event
+  repeat (daily, every weekday, weekly, monthly, yearly), forever or until a
+  date. Deleting a repeating event asks
   whether to delete one event or the whole series.
 - **Synced reminders**: the reminders set on each event (on your phone, on
   the web, or here) become desktop notifications. They have Join, Snooze and

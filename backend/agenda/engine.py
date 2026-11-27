@@ -19,6 +19,17 @@ WINDOW_FUTURE_DAYS = 62
 PENDING_TTL = 600
 MAX_EVENTS_PER_CALENDAR = 20000
 
+# The "repeat" choices of the new event form, as RRULE values. Weekly,
+# monthly and yearly follow the first occurrence's weekday or date, like
+# Google Calendar's own presets.
+REPEAT_RULES = {
+    "daily": "FREQ=DAILY",
+    "weekdays": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR",
+    "weekly": "FREQ=WEEKLY",
+    "monthly": "FREQ=MONTHLY",
+    "yearly": "FREQ=YEARLY",
+}
+
 DEFAULT_SETTINGS = {
     "syncMinutes": 10,
     "reminders": True,
@@ -499,6 +510,33 @@ class Engine:
                 return acc, cal
         raise EngineError("unknown_calendar")
 
+    def _rrule(self, p, start_ms, all_day):
+        """The RRULE value (without "RRULE:") for the form's "repeat" choice,
+        or "" for a one-off event. "until" is the last day the series may
+        occur on, as local midnight in ms; absent means no end."""
+        repeat = str(p.get("repeat") or "")
+        if not repeat:
+            return ""
+        if repeat not in REPEAT_RULES:
+            raise EngineError("bad_repeat")
+        rule = REPEAT_RULES[repeat]
+        until = p.get("until")
+        if until is None or until == "":
+            return rule
+        try:
+            last = dt.datetime.fromtimestamp(int(until) / 1000, self.zone).date()
+            first = dt.datetime.fromtimestamp(start_ms / 1000, self.zone).date()
+        except (TypeError, ValueError, OverflowError, OSError):
+            raise EngineError("bad_repeat")
+        if last < first:
+            raise EngineError("bad_repeat")
+        if all_day:
+            return rule + ";UNTIL=" + last.strftime("%Y%m%d")
+        # Every occurrence starting on or before the last day (local time)
+        # is kept; for a timed start, UNTIL must be in UTC (RFC 5545).
+        end_of_day = dt.datetime.combine(last, dt.time(23, 59, 59), self.zone)
+        return rule + ";UNTIL=" + end_of_day.astimezone(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+
     def create_event(self, p):
         acc, cal = self._writable(str(p.get("accountId", "")), str(p.get("calendarId", "")))
         title = _clean(p.get("title"), 300)
@@ -529,6 +567,7 @@ class Engine:
             "location": _clean(p.get("location"), 300),
             "description": _clean(p.get("description"), 2000),
             "reminders": reminders,
+            "rrule": self._rrule(p, start_ms, all_day),
         }
         provider = self._provider(acc)
         try:

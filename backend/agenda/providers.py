@@ -106,7 +106,8 @@ class CalDavProvider:
             start = dt.datetime.fromtimestamp(p["start_ms"] / 1000, ics.UTC)
             end = dt.datetime.fromtimestamp(p["end_ms"] / 1000, ics.UTC)
         uid, text = ics.build_event(p["title"], start, end, p["all_day"], p["location"],
-                                    p["description"], p["reminders"])
+                                    p["description"], p["reminders"],
+                                    rrule=p.get("rrule", ""), zone=zone)
         client.put_new(cal["id"], uid, text)
 
     def delete(self, client, acc, cal, ev, scope):

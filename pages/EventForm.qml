@@ -5,8 +5,9 @@ import qs.Ui
 import "../components"
 import "../Model.js" as Model
 
-// New event. Dates are typed (dd/mm/yyyy) rather than picked: the panel is
-// keyboard-first, and Tab walks the fields in reading order.
+// New event. Dates are typed (dd/mm/yyyy) or picked from a calendar (the
+// button beside each date, or Down in the field); Tab walks the fields in
+// reading order.
 Column {
   id: root
 
@@ -124,6 +125,12 @@ Column {
     onAccepted: if (!root.panel.busy && titleField.text.trim() !== "") root.submit()
   }
 
+  component DatePick: DateField {
+    panel: root.panel
+    onEscaped: root.panel.openPage("agenda")
+    onAccepted: if (!root.panel.busy && titleField.text.trim() !== "") root.submit()
+  }
+
   component Caption: PlainLabel {
     color: Util.alpha(root.panel.fg, 0.6)
     font.family: root.panel.fontFamily
@@ -153,14 +160,14 @@ Column {
       width: allDay.checked ? (root.width - Style.space(8)) / 2 : root.width * 0.44
       spacing: Style.space(3)
       Caption { text: root.panel.strings.t("form.date") }
-      Field { id: dateField; width: parent.width; maximumLength: 10; inputMethodHints: Qt.ImhDate }
+      DatePick { id: dateField; width: parent.width }
     }
     Column {
       visible: allDay.checked
       width: (root.width - Style.space(8)) / 2
       spacing: Style.space(3)
       Caption { text: root.panel.strings.t("form.endDate") }
-      Field { id: endDateField; width: parent.width; maximumLength: 10 }
+      DatePick { id: endDateField; width: parent.width }
     }
     Column {
       visible: !allDay.checked
@@ -192,10 +199,10 @@ Column {
     width: root.width
     spacing: Style.space(3)
     Caption { text: root.panel.strings.t("form.until") }
-    Field {
+    DatePick {
       id: untilField
+      width: root.width
       placeholderText: root.panel.strings.t("form.untilNever")
-      maximumLength: 10
     }
   }
 

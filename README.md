@@ -14,7 +14,8 @@ built-in clock untouched.
 - **Add and delete events**: quick add ("Dentist tomorrow 2pm-3pm",
   "Dentiste demain 14h-15h") or a full form. The form can make the event
   repeat (daily, every weekday, weekly, monthly, yearly), forever or until a
-  date. Deleting a repeating event asks
+  date. Dates can be typed or picked from a calendar. Deleting a repeating
+  event asks
   whether to delete one event or the whole series.
 - **Synced reminders**: the reminders set on each event (on your phone, on
   the web, or here) become desktop notifications. They have Join, Snooze and
